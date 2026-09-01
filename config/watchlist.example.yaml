@@ -3,7 +3,9 @@
 # title:     영화명 부분 일치 (공백 무시). 예: "레지던트" 만으로도 매칭됨
 # theaters:  극장명 — `python -m src.main theaters 강남` 으로 정확한 이름 확인
 # date_from/date_to: 관람 희망 날짜 범위 (생략 시 모든 날짜)
+# days:      요일 필터 (예: [토, 일] / [sat, sun]) — 생략 시 모든 요일
 # time_from/time_to: 상영 시작시간 범위 (생략 시 모든 시간). 심야는 "24:30" 식 표기
+# screen:    상영관/포맷 필터 (예: IMAX, 4DX, SCREENX, 리클라이너) — 관 이름·포맷명 부분 일치
 
 watches:
   - title: 레지던트 이블
@@ -13,5 +15,7 @@ watches:
     time_from: "18:00"
     time_to: "23:00"
 
-  - title: 퓨리어스
-    theaters: [강남]
+  - title: 오디세이
+    theaters: [용산아이파크몰]
+    days: [토, 일]
+    screen: IMAX

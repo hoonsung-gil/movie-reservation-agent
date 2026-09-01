@@ -53,6 +53,11 @@ def _watch_dates(watch: dict, avail: list[str]) -> list[str]:
         dates = [x for x in avail if x in set(wanted)]
     else:
         dates = list(avail)
+    if watch.get("days"):
+        dates = [
+            x for x in dates
+            if date(int(x[:4]), int(x[4:6]), int(x[6:8])).weekday() in watch["days"]
+        ]
     return dates[:MAX_DATES_PER_THEATER]
 
 

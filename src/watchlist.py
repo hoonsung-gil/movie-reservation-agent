@@ -8,6 +8,8 @@ config/watchlist.yaml 형식:
       date_to: 2026-09-20       # 선택 — 없으면 date_from과 동일
       time_from: "18:00"        # 선택 — 상영 시작시간 범위
       time_to: "23:00"
+      days: [토, 일]             # 선택 — 요일 필터 (월~일 또는 mon~sun)
+      screen: IMAX              # 선택 — 상영관/포맷 필터 (관 이름 또는 포맷명에 포함, 대소문자 무시)
 """
 from datetime import date
 from pathlib import Path
@@ -48,9 +50,31 @@ def load_watchlist(path: Path = CONFIG_PATH) -> list[dict]:
                 "date_to": _as_date(w.get("date_to")) or _as_date(w.get("date_from")),
                 "time_from": _as_hhmm(w.get("time_from")),
                 "time_to": _as_hhmm(w.get("time_to")),
+                "days": _as_days(w.get("days")),
+                "screen": str(w["screen"]).strip() if w.get("screen") else None,
             }
         )
     return out
+
+
+_DAY_TOKENS = {
+    "월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6,
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+}
+
+
+def _as_days(v) -> set[int] | None:
+    """요일 목록 → weekday 정수 집합 (월=0 ... 일=6)."""
+    if not v:
+        return None
+    days = set()
+    for tok in v:
+        t = str(tok).strip().lower()[:3]
+        t = t if t in _DAY_TOKENS else str(tok).strip()[0]
+        if t not in _DAY_TOKENS:
+            raise WatchlistError(f"요일 형식 오류: {tok!r} (예: 토, 일, sat, sun)")
+        days.add(_DAY_TOKENS[t])
+    return days
 
 
 def _as_date(v) -> date | None:
@@ -77,10 +101,15 @@ def title_matches(watch_title: str, movie_title: str) -> bool:
 
 
 def session_matches(watch: dict, session: dict) -> bool:
-    """시간표 회차가 watch의 시간대 조건에 맞는지. (심야 26:00 표기도 그대로 문자열 비교)"""
+    """시간표 회차가 watch의 시간대/상영관 조건에 맞는지. (심야 26:00 표기도 그대로 문자열 비교)"""
     start = session.get("scnsrtTm") or ""
     if watch["time_from"] and start < watch["time_from"]:
         return False
     if watch["time_to"] and start > watch["time_to"]:
         return False
+    if watch.get("screen"):
+        target = watch["screen"].lower()
+        haystack = f"{session.get('scnsNm', '')} {session.get('movkndDsplNm', '')}".lower()
+        if target not in haystack:
+            return False
     return True
