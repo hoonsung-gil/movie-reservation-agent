@@ -1,0 +1,17 @@
+# 이 파일을 watchlist.yaml로 복사해 작성하세요 (watchlist.yaml은 git 제외).
+#
+# title:     영화명 부분 일치 (공백 무시). 예: "레지던트" 만으로도 매칭됨
+# theaters:  극장명 — `python -m src.main theaters 강남` 으로 정확한 이름 확인
+# date_from/date_to: 관람 희망 날짜 범위 (생략 시 모든 날짜)
+# time_from/time_to: 상영 시작시간 범위 (생략 시 모든 시간). 심야는 "24:30" 식 표기
+
+watches:
+  - title: 레지던트 이블
+    theaters: [강남, 용산아이파크몰]
+    date_from: 2026-09-17
+    date_to: 2026-09-20
+    time_from: "18:00"
+    time_to: "23:00"
+
+  - title: 퓨리어스
+    theaters: [강남]

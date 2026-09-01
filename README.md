@@ -22,7 +22,33 @@ playwright install chromium
 
 # 개봉예정작 수집 + 오픈일 추측
 python -m src.main upcoming
+
+# 극장명/siteNo 검색
+python -m src.main theaters 강남
+
+# 감시 루프 (watchlist 기반, 텔레그램 알림) — 상시 실행 PC에서
+python -m src.main watch              # 기본 10분 주기, 오픈 임박 시 2분으로 단축
+python -m src.main watch --once       # 1사이클만 (테스트용)
 ```
+
+### 텔레그램 설정 (최초 1회)
+
+1. 텔레그램에서 `@BotFather`에게 `/newbot` → 봇 생성, 토큰 복사
+2. `.env.example`을 `.env`로 복사하고 `TELEGRAM_BOT_TOKEN`에 토큰 입력
+3. 생성한 봇에게 아무 메시지나 1개 전송
+4. `python -m src.main telegram-chat-id` → 출력된 chat_id를 `.env`의 `TELEGRAM_CHAT_ID`에 입력
+5. `python -m src.main telegram-test` → 텔레그램으로 테스트 메시지 도착하면 완료
+
+### watchlist 설정
+
+`config/watchlist.example.yaml`을 `config/watchlist.yaml`로 복사해 원하는 영화/극장/날짜/시간대를 등록합니다.
+
+### 알림 동작
+
+- **예매 오픈**: 등록한 영화가 CGV에서 예매 가능 상태가 되면 즉시 알림
+- **회차 발견**: 원하는 극장/날짜/시간대에 상영 회차가 열리면 회차·잔여석 상세와 함께 알림
+- 같은 내용은 한 번만 발송 (`data/alert_state.json`에 이력 기록)
+- 수집 3회 연속 실패 시 자체 경고 알림
 
 ## 디렉토리
 
