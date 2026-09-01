@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+_test/
+.env
+config/watchlist.yaml
