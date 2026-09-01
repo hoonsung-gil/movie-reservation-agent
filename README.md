@@ -43,6 +43,11 @@ python -m src.main watch --once       # 1사이클만 (테스트용)
 
 `config/watchlist.example.yaml`을 `config/watchlist.yaml`로 복사해 원하는 영화/극장/날짜/시간대를 등록합니다.
 
+### 상시 실행 (Windows)
+
+- 수동 시작: `scripts\run_watch.bat` 더블클릭 (로그: `data\watch.log`)
+- **로그온 시 자동 시작 등록**: `Win+R` → `shell:startup` 입력 → 열린 폴더에 `scripts\run_watch.bat`의 **바로가기**를 복사해 넣기
+
 ### 알림 동작
 
 - **예매 오픈**: 등록한 영화가 CGV에서 예매 가능 상태가 되면 즉시 알림
