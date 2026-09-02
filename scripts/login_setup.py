@@ -72,14 +72,13 @@ def main():
             locale="ko-KR", viewport={"width": 1360, "height": 900},
             args=["--disable-blink-features=AutomationControlled", "--disable-notifications"],
         )
-        # 광고 팝업창(새 창)은 자동으로 닫기 — 단 로그인/CJ ONE 창은 유지
+        # 광고 팝업창(새 창) 자동 닫기 — 확실한 광고 URL일 때만. 애매하면 절대 닫지 않음.
         def on_page(pg):
             try:
-                url = pg.url or ""
-                if "ad.cgv" in url or url in ("about:blank", ""):
-                    time.sleep(1)
-                    if "cjone" not in (pg.url or "") and "login" not in (pg.url or "").lower():
-                        pg.close()
+                time.sleep(2)  # 네비게이션 완료 대기 (about:blank → 실제 URL)
+                url = (pg.url or "").lower()
+                if "ad.cgv" in url or "netinsight" in url:
+                    pg.close()
             except Exception:
                 pass
         ctx.on("page", on_page)
@@ -100,17 +99,15 @@ def main():
         logged = None
         while time.time() < deadline:
             time.sleep(3)
-            # 현재 활성 페이지(로그인 후 리다이렉트될 수 있음)에서 확인
+            # 조용히 SSO만 폴링 — 사용자 입력(로그인 폼)을 방해하지 않도록
+            # Escape/닫기 클릭/포커스 이동은 절대 반복하지 않는다.
             pages = [pg for pg in ctx.pages if not pg.is_closed()]
             if not pages:
                 break
-            cur = pages[-1]
-            try:
-                cur.bring_to_front()
-            except Exception:
-                pass
-            dismiss_ads(cur)
-            logged = is_logged_in(cur)
+            for cur in pages:
+                logged = is_logged_in(cur)
+                if logged:
+                    break
             if logged:
                 break
 
