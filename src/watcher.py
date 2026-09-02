@@ -19,7 +19,8 @@ from src.storage import DATA_DIR, load_history, load_latest, save_snapshot, upda
 from src.watchlist import load_watchlist, normalize_title, session_matches, title_matches
 
 STATE_PATH = DATA_DIR / "alert_state.json"
-MAX_DATES_PER_THEATER = 12
+MAX_DATES_PER_THEATER = 16
+WEEKDAYS_KO = ["월", "화", "수", "목", "금", "토", "일"]
 FAST_INTERVAL = 120       # 오픈 예상일 임박 / 원하는 회차가 아직 안 열린 날짜가 남아있을 때
 NEAR_OPEN_DAYS = 3
 HORIZON_MARGIN_DAYS = 7   # 예매창 끝단 너머 이만큼까지를 "곧 열릴 날짜"로 보고 감시
@@ -43,6 +44,11 @@ def _fmt_time(hhmm: str) -> str:
 
 def _ymd_to_date(ymd: str) -> date:
     return date(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8]))
+
+
+def _fmt_date(ymd: str) -> str:
+    d = _ymd_to_date(ymd)
+    return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]} ({WEEKDAYS_KO[d.weekday()]})"
 
 
 def _target_dates(watch: dict, today: date, avail: list[str]) -> list[str]:
@@ -165,7 +171,7 @@ def run_cycle(verbose: bool = True) -> dict:
                                 f"(잔여 {s['frSeatCnt']}/{s['stcnt']}석, {s.get('movkndDsplNm', '')})"
                                 for s in hits[:6]
                             ]
-                            blocks.append(f"📅 {ymd[:4]}-{ymd[4:6]}-{ymd[6:]}\n" + "\n".join(lines))
+                            blocks.append(f"📅 {_fmt_date(ymd)}\n" + "\n".join(lines))
                         alerts.append(
                             f"🍿 원하는 조건의 상영 회차 발견!\n"
                             f"영화: {m['title']}\n"
