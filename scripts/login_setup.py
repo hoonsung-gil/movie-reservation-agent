@@ -29,28 +29,26 @@ PROFILE_DIR = Path(__file__).resolve().parent.parent / "data" / "browser_profile
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 TIMEOUT_MIN = 15
-CLOSE_SELECTORS = [
-    "text=오늘 하루 보지 않기", "text=오늘 하루 열지 않기", "text=일주일간 보지 않기",
-    "button:has-text('닫기')", "[class*='close']", "[class*='btnClose']", "[aria-label='닫기']",
-]
+LOGIN_URL = "https://cgv.co.kr/mem/login?returnUrl=%2F"
 
 
 def dismiss_ads(page):
-    """홈 광고/이벤트 레이어 닫기 시도 (안전한 것만)."""
-    try:
-        page.keyboard.press("Escape")
-    except Exception:
-        pass
-    for sel in CLOSE_SELECTORS:
+    """광고 모달(.cgv-modal.active)이 떠 있으면 닫는다. 최대 10초 재시도."""
+    for _ in range(10):
         try:
-            loc = page.locator(sel)
-            for i in range(min(loc.count(), 3)):
+            modal = page.locator(".cgv-modal.active")
+            if modal.count() == 0:
+                return
+            for sel in ["button:has-text('오늘은 그만 보기')", "button:has-text('오늘 하루 보지 않기')",
+                        "button:has-text('닫기')", "button[class*='close']"]:
                 try:
-                    loc.nth(i).click(timeout=800)
+                    modal.first.locator(sel).first.click(timeout=1500)
+                    break
                 except Exception:
-                    pass
+                    continue
+            page.wait_for_timeout(700)
         except Exception:
-            pass
+            return
 
 
 def is_logged_in(page) -> str | None:
@@ -84,14 +82,13 @@ def main():
         ctx.on("page", on_page)
 
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto("https://cgv.co.kr/", wait_until="domcontentloaded", timeout=60000)
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(2000)
         dismiss_ads(page)
 
         print("=" * 60)
-        print("이 창에서 CGV(우측 상단 사람/메뉴 아이콘)에 로그인해 주세요.")
-        print("로그인만 하시면 됩니다 — 완료되면 자동으로 저장되고 창이 닫힙니다.")
-        print("(광고 팝업은 자동으로 닫으려 시도합니다. 남으면 그냥 두셔도 됩니다.)")
+        print("로그인 페이지가 바로 열렸습니다. 아이디/비밀번호로 로그인해 주세요.")
+        print("완료되면 자동으로 저장되고 창이 닫힙니다.")
         print("=" * 60)
         sys.stdout.flush()
 
