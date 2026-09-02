@@ -17,6 +17,12 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from playwright.sync_api import sync_playwright
 
 PROFILE_DIR = Path(__file__).resolve().parent.parent / "data" / "browser_profile"

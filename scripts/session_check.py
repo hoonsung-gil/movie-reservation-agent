@@ -6,8 +6,14 @@
 주의: 쿠키 만료(절대 만료) 외에 서버측 '유휴 타임아웃'이 따로 있을 수 있음.
 쿠키 만료는 상한선(그 전에 유휴로 끊길 수도 있음)으로 이해할 것.
 """
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from playwright.sync_api import sync_playwright
 

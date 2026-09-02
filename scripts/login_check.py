@@ -3,7 +3,13 @@
 login_setup.py로 로그인한 뒤 실행하면, 프로필 재사용으로 로그인이 유지되는지 확인한다.
 로그인 판별: 마이페이지/회원 전용 영역 접근 또는 로그인 링크 부재.
 """
+import sys
 from pathlib import Path
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from playwright.sync_api import sync_playwright
 
