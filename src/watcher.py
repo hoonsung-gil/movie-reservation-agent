@@ -19,10 +19,10 @@ from src.storage import DATA_DIR, load_history, load_latest, save_snapshot, upda
 from src.watchlist import load_watchlist, normalize_title, session_matches, title_matches
 
 STATE_PATH = DATA_DIR / "alert_state.json"
-MAX_DATES_PER_THEATER = 10
-FAST_INTERVAL = 120       # 오픈 예상일 임박 시
-MID_INTERVAL = 300        # 영화는 열렸는데 원하는 극장 회차가 아직 없을 때
+MAX_DATES_PER_THEATER = 12
+FAST_INTERVAL = 120       # 오픈 예상일 임박 / 원하는 회차가 아직 안 열린 날짜가 남아있을 때
 NEAR_OPEN_DAYS = 3
+HORIZON_MARGIN_DAYS = 7   # 예매창 끝단 너머 이만큼까지를 "곧 열릴 날짜"로 보고 감시
 CONSECUTIVE_FAIL_ALERT = 3
 
 
@@ -41,24 +41,31 @@ def _fmt_time(hhmm: str) -> str:
     return f"{hhmm[:2]}:{hhmm[2:]}" if len(hhmm) == 4 else hhmm
 
 
-def _watch_dates(watch: dict, avail: list[str]) -> list[str]:
-    """watch 날짜 범위와 극장의 예매 가능 날짜의 교집합 (상한 적용)."""
-    if watch["date_from"]:
-        d0, d1 = watch["date_from"], watch["date_to"] or watch["date_from"]
-        wanted = []
-        d = d0
-        while d <= d1:
-            wanted.append(d.strftime("%Y%m%d"))
-            d += timedelta(days=1)
-        dates = [x for x in avail if x in set(wanted)]
-    else:
-        dates = list(avail)
-    if watch.get("days"):
-        dates = [
-            x for x in dates
-            if date(int(x[:4]), int(x[4:6]), int(x[6:8])).weekday() in watch["days"]
-        ]
-    return dates[:MAX_DATES_PER_THEATER]
+def _ymd_to_date(ymd: str) -> date:
+    return date(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8]))
+
+
+def _target_dates(watch: dict, today: date, avail: list[str]) -> list[str]:
+    """감시 대상 날짜(YYYYMMDD) 목록.
+
+    오늘(또는 date_from)부터 '예매창 끝단 + margin'까지의 날짜 중 요일/날짜 조건에 맞는 것.
+    예매창에 아직 없는(=곧 열릴) 날짜도 포함되므로, 이를 통해 '미오픈 잔여 날짜'를 감지한다.
+    open-ended(날짜 미지정) watch도 예매창을 따라 horizon이 자동으로 굴러간다.
+    """
+    max_avail = max((_ymd_to_date(x) for x in avail), default=today)
+    horizon_end = max_avail + timedelta(days=HORIZON_MARGIN_DAYS)
+
+    d0 = max(watch["date_from"] or today, today)
+    d1 = watch["date_to"] or horizon_end
+    d1 = min(d1, horizon_end)  # open-ended는 horizon으로, 먼 미래 date_to도 horizon으로 캡
+
+    out = []
+    d = d0
+    while d <= d1:
+        if not watch.get("days") or d.weekday() in watch["days"]:
+            out.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    return out[:MAX_DATES_PER_THEATER]
 
 
 def run_cycle(verbose: bool = True) -> dict:
@@ -81,7 +88,7 @@ def run_cycle(verbose: bool = True) -> dict:
 
         theaters = {t["siteNm"]: t["siteNo"] for t in api.theaters()}
         near_open = False
-        waiting_sessions = False
+        pending_future = False   # 원하는 조건의 회차가 아직 안 열린 날짜가 남아있음
 
         for watch in watches:
             wkey = normalize_title(watch["title"])
@@ -119,32 +126,37 @@ def run_cycle(verbose: bool = True) -> dict:
                     )
                     state[key_open] = now.isoformat(timespec="seconds")
 
-                found_any_session = False
                 for name, site_no in site_nos.items():
                     try:
                         avail = api.available_dates(site_no)
                     except Exception as e:
                         print(f"[경고] {name} 날짜 조회 실패: {e}")
+                        pending_future = True  # 확인 실패 → 계속 감시
                         continue
+                    avail_set = set(avail)
                     new_days: list[tuple[str, list[dict]]] = []
-                    for ymd in _watch_dates(watch, avail):
+                    for ymd in _target_dates(watch, today, avail):
                         key_sess = f"session_found:{wkey}:{site_no}:{ymd}"
                         if key_sess in state:
-                            found_any_session = True
+                            continue  # 이미 열려서 알림 보낸 날짜
+                        if ymd not in avail_set:
+                            pending_future = True  # 예매창에 아직 없는 날짜(곧 열림)
                             continue
                         try:
                             sessions = api.schedule(site_no, ymd)
                         except Exception as e:
                             print(f"[경고] {name} {ymd} 시간표 조회 실패: {e}")
+                            pending_future = True
                             continue
                         hits = [
                             s for s in sessions
                             if s.get("movNo") == m["mov_no"] and session_matches(watch, s)
                         ]
                         if hits:
-                            found_any_session = True
                             new_days.append((ymd, hits))
                             state[key_sess] = now.isoformat(timespec="seconds")
+                        else:
+                            pending_future = True  # 예매창엔 있으나 원하는 회차 아직 없음
                     if new_days:
                         blocks = []
                         for ymd, hits in new_days:
@@ -161,8 +173,6 @@ def run_cycle(verbose: bool = True) -> dict:
                             + "\n".join(blocks)
                             + "\n예매: https://cgv.co.kr/cnm/movieBook"
                         )
-                if m["bookable"] and site_nos and not found_any_session:
-                    waiting_sessions = True
 
     for msg in alerts:
         send_telegram(msg)
@@ -171,11 +181,10 @@ def run_cycle(verbose: bool = True) -> dict:
             print(msg)
     _save_state(state)
 
-    hint = None
-    if near_open:
-        hint = FAST_INTERVAL
-    elif waiting_sessions:
-        hint = MID_INTERVAL
+    hint = FAST_INTERVAL if (near_open or pending_future) else None
+    if verbose and hint:
+        reason = "오픈 임박" if near_open else "미오픈 잔여 날짜 있음"
+        print(f"[주기] 빠른 감시({FAST_INTERVAL}초) — {reason}")
     return {"alerts": alerts, "next_interval_hint": hint}
 
 
