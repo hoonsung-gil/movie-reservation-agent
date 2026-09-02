@@ -1,19 +1,21 @@
-"""CGV 로그인 세션 키퍼 (상시 실행).
+"""CGV 로그인 세션 키퍼 v2 (접속 방식, 상시 실행).
 
-CGV 웹 로그인은 세션 방식(브라우저 종료 = 로그아웃, 자동로그인 옵션 없음)이므로,
-로그인한 브라우저를 계속 띄워두고 주기적으로 세션을 확인/유지한다.
+브라우저는 browser_launch.py가 '독립 프로세스'로 띄우고,
+키퍼는 CDP로 접속만 한다 → 키퍼가 죽거나 재시작돼도 로그인 세션은 유지.
 
-- 시작하면 로그인 페이지가 열림 → 사용자가 로그인 (창은 절대 닫지 말 것, 최소화는 OK)
-- 로그인 후: 5분마다 세션 확인(유지 겸용), 풀리면 텔레그램 알림
-- CDP 포트(127.0.0.1:9222)를 열어두어 다른 스크립트(좌석 읽기/선점)가
-  이 로그인된 브라우저에 접속해 작업할 수 있게 한다.
-- 상태 파일: data/session_status.json
+동작:
+- CDP(9222)에 접속 (브라우저 없으면 자동 실행)
+- 로그인 대기 (마이메뉴 확인) → 확인되면 텔레그램 알림
+- 이후 5분마다 세션 확인(keep-alive), 풀리면 텔레그램 알림
+- 브라우저가 닫히면: 자동 재실행 + 재로그인 요청 텔레그램
+- 상태 파일: data/session_status.json (state: waiting_login | logged_in | session_lost | browser_down)
 
 사용법: python scripts/session_keeper.py  (백그라운드 상시 실행)
 """
 import json
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -28,26 +30,35 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from src.notify import send_telegram  # noqa: E402
+from scripts.browser_launch import launch as launch_browser  # noqa: E402
 
-PROFILE_DIR = ROOT / "data" / "browser_profile"
 STATUS_PATH = ROOT / "data" / "session_status.json"
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-LOGIN_URL = "https://cgv.co.kr/mem/login?returnUrl=%2F"
+CDP_URL = "http://127.0.0.1:9222"
 CHECK_URL = "https://cgv.co.kr/tme/tmeShowMore"
-CDP_PORT = 9222
-LOGIN_WAIT_MIN = 30
 KEEPALIVE_SEC = 300
+LOGIN_POLL_SEC = 5
 
 
-def write_status(**kw):
+def write_status(state: str, **kw):
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    kw["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    kw.update(state=state, updated_at=datetime.now().isoformat(timespec="seconds"))
     STATUS_PATH.write_text(json.dumps(kw, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def log(msg: str):
+    print(f"[{datetime.now():%H:%M:%S}] {msg}")
+    sys.stdout.flush()
+
+
+def tg(msg: str):
+    try:
+        send_telegram(msg)
+    except Exception as e:
+        log(f"텔레그램 실패: {e}")
+
+
 def check_session(ctx) -> bool:
-    """새 탭에서 마이메뉴를 열어 로그인 유지 확인 (세션 keep-alive 겸용)."""
+    """새 탭에서 마이메뉴를 열어 로그인 유지 확인 (keep-alive 겸용)."""
     pg = ctx.new_page()
     try:
         pg.goto(CHECK_URL, wait_until="domcontentloaded", timeout=30000)
@@ -61,99 +72,91 @@ def check_session(ctx) -> bool:
             pass
 
 
-def main():
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR), headless=False, user_agent=UA,
-            locale="ko-KR", viewport={"width": 1360, "height": 900},
-            args=["--disable-blink-features=AutomationControlled",
-                  "--disable-notifications",
-                  f"--remote-debugging-port={CDP_PORT}"],
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-        print("=" * 60)
-        print("로그인 페이지가 열렸습니다. 로그인해 주세요.")
-        print("※ 이 창은 닫지 마세요! (최소화는 괜찮습니다)")
-        print("  로그인 세션을 유지하는 창입니다. 닫으면 로그아웃됩니다.")
-        print("=" * 60)
-        sys.stdout.flush()
-        write_status(state="waiting_login", cdp_port=CDP_PORT)
+def quiet_login_probe(ctx) -> bool:
+    """로그인 대기용 무간섭 확인: 기존 페이지의 렌더 상태만 읽는다 (탭/포커스 안 건드림).
 
-        # 1) 로그인 대기: 로그인 페이지를 벗어나면 성공으로 판단
-        deadline = time.time() + LOGIN_WAIT_MIN * 60
-        logged_in = False
-        while time.time() < deadline:
-            time.sleep(3)
-            try:
-                pages = [pg for pg in ctx.pages if not pg.is_closed()]
-                if not pages:
-                    print("브라우저가 닫혔습니다. 종료.")
-                    write_status(state="browser_closed")
-                    return 1
-                if all("/mem/login" not in (pg.url or "") for pg in pages):
-                    logged_in = True
-                    break
-            except Exception:
-                pass
-        if not logged_in:
-            print("로그인 대기 시간 초과. 종료.")
-            write_status(state="login_timeout")
-            return 1
-
-        # 로그인 직후 실제 세션 확인
-        time.sleep(3)
-        ok = check_session(ctx)
-        print(f"✅ 로그인 감지. 세션 확인: {'정상' if ok else '비정상'}")
-        write_status(state="logged_in" if ok else "unverified",
-                     logged_in_at=datetime.now().isoformat(timespec="seconds"),
-                     cdp_port=CDP_PORT)
+    로그인 성공 시 returnUrl로 이동한 CGV 페이지 푸터에 '로그아웃'이 표시됨.
+    """
+    for pg in ctx.pages:
         try:
-            send_telegram("🔐 CGV 로그인 세션 확보! 세션 키퍼가 유지 중입니다. (창을 닫지 마세요)")
+            url = pg.url or ""
+            if "cgv.co.kr" not in url or "/mem/login" in url:
+                continue
+            txt = pg.evaluate("() => document.body.innerText")
+            if "로그아웃" in txt:
+                return True
         except Exception:
-            pass
+            continue
+    return False
 
-        # 2) keep-alive 루프
-        lost_alerted = False
-        while True:
-            time.sleep(KEEPALIVE_SEC)
-            try:
-                pages = [pg for pg in ctx.pages if not pg.is_closed()]
-            except Exception:
-                pages = []
-            if not pages:
-                print("브라우저가 닫혔습니다. 세션 종료.")
-                write_status(state="browser_closed")
+
+def connect(p):
+    """CDP 접속. 실패 시 브라우저 자동 실행 후 재시도."""
+    for attempt in range(3):
+        try:
+            return p.chromium.connect_over_cdp(CDP_URL, timeout=10000)
+        except Exception:
+            if attempt == 0:
+                log("CDP 접속 실패 — 브라우저 실행")
                 try:
-                    send_telegram("⚠️ CGV 세션 브라우저가 닫혔습니다. 재로그인이 필요합니다. (session_keeper 재실행)")
-                except Exception:
-                    pass
-                return 1
-            try:
-                ok = check_session(ctx)
-            except Exception as e:
-                print("세션 확인 오류:", str(e)[:120])
-                ok = False
-            now = datetime.now().strftime("%H:%M:%S")
-            if ok:
-                print(f"[{now}] 세션 정상 (keep-alive)")
-                write_status(state="logged_in", cdp_port=CDP_PORT)
+                    launch_browser()
+                except Exception as e:
+                    log(f"브라우저 실행 실패: {e}")
+            time.sleep(5)
+    raise RuntimeError("브라우저 CDP 접속 불가")
+
+
+def main():
+    log("세션 키퍼 v2 시작")
+    while True:  # 브라우저 다운 시 재실행 루프
+        try:
+            with sync_playwright() as p:
+                browser = connect(p)
+                ctx = browser.contexts[0]
+                log("CDP 접속 완료")
+
+                # 1) 로그인 확인/대기 — 무간섭 확인(사용자 입력 방해 금지)
+                announced = False
+                while True:
+                    if quiet_login_probe(ctx):
+                        break
+                    if not announced:
+                        log("로그인 대기 중... (열린 창에서 로그인해 주세요)")
+                        write_status("waiting_login")
+                        announced = True
+                    time.sleep(LOGIN_POLL_SEC)
+
+                log("✅ 로그인 확인")
+                write_status("logged_in", logged_in_at=datetime.now().isoformat(timespec="seconds"))
+                tg("🔐 CGV 로그인 세션 확보! 키퍼가 유지 중입니다. (브라우저 창을 닫지 마세요)")
+
+                # 2) keep-alive
                 lost_alerted = False
-            else:
-                print(f"[{now}] ⚠️ 세션 풀림 감지")
-                write_status(state="session_lost", cdp_port=CDP_PORT)
-                if not lost_alerted:
-                    try:
-                        send_telegram("⚠️ CGV 로그인 세션이 풀렸습니다. 세션 키퍼 창에서 다시 로그인해 주세요.")
-                    except Exception:
-                        pass
-                    lost_alerted = True
-                # 재로그인 편의를 위해 로그인 페이지로 이동
-                try:
-                    pages[0].goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
-                except Exception:
-                    pass
+                while True:
+                    time.sleep(KEEPALIVE_SEC)
+                    ok = check_session(ctx)  # 예외 → 바깥 루프 재접속
+                    if ok:
+                        log("세션 정상 (keep-alive)")
+                        write_status("logged_in")
+                        if lost_alerted:
+                            tg("✅ CGV 세션이 다시 정상입니다.")
+                            lost_alerted = False
+                    else:
+                        log("⚠️ 세션 풀림 감지")
+                        write_status("session_lost")
+                        if not lost_alerted:
+                            tg("⚠️ CGV 로그인 세션이 풀렸습니다. 세션 브라우저에서 다시 로그인해 주세요.")
+                            lost_alerted = True
+        except KeyboardInterrupt:
+            log("종료")
+            return 0
+        except Exception as e:
+            log(f"브라우저 연결 문제: {str(e)[:150]}")
+            traceback.print_exc()
+            write_status("browser_down")
+            tg("⚠️ CGV 세션 브라우저가 닫혔거나 응답하지 않습니다. 다시 실행하고 재로그인을 요청드립니다.")
+            time.sleep(5)
+            # 루프 계속 → connect()가 브라우저 재실행
 
 
 if __name__ == "__main__":
